@@ -1,3 +1,5 @@
+// Modified from https://github.com/bbbradsmith/prng_6502/
+
 PORTB = $6000
 PORTA = $6001
 DDRB = $6002
@@ -6,8 +8,9 @@ DDRA = $6003
 value = $0200 // 2 bytes
 mod10 = $0202 // 2 bytes
 message = $0204 // 6 bytes
-counter = $020a // 2 bytes
+seed = $020a // 4 bytes
 dcount = $0210 // 2 bytes
+dcount2 = $0212 // 2 bytes
 
 E  = %10000000
 RW = %01000000
@@ -33,34 +36,24 @@ reset:
   lda #$00000001 // Clear display
   jsr lcd_instruction
 
-  // Init counter to 0
-  lda #0
-  sta counter
-  sta counter + 1
-
-loop:
+mainloop:
   lda #%00000010 // Put LCD cursor at start
   jsr lcd_instruction
 
-  // Delay
+  jsr galois16
+
+  // Slow it down, puerly for aestetics
   jsr delay
 
-
-inc_count:
-  inc counter // updates fZ with status of increment result
-  bne no_overfl // jump to loc if fZ is not set
-  inc counter + 1 
-
-no_overfl:
+  // Clear output message
   lda #0
   sta message
 
-  // Init value to be the counter to convert
-  lda counter
+  // Init seed to be converted message
+  lda seed
   sta value
-  lda counter + 1
+  lda seed + 1
   sta value + 1
-  
 
 divide:
   lda #0
@@ -69,6 +62,7 @@ divide:
   clc
 
   ldx #16
+
 divloop:
   // Rotate quotient and remainder
   rol value
@@ -86,6 +80,7 @@ divloop:
   bcc ignore_result // Branch if divident < divisor
   sty mod10
   sta mod10 + 1
+
 ignore_result
   dex
   bne divloop
@@ -106,7 +101,7 @@ ignore_result
 
 print:
   lda message,x
-  beq loop
+  beq mainloop
   jsr print_char
   inx
   jmp print
@@ -174,12 +169,49 @@ print_char:
   sta PORTA
   rts
 
-delay
-  inc dcount        // updates fZ with status of increment result
-  bne delay         // jump to loc if fZ is not set
+galois16:
+  lda seed+1
+	tay ; store copy of high byte
+	; compute seed+1 ($39>>1 = %11100)
+	lsr ; shift to consume zeroes on left...
+	lsr
+	lsr
+	sta seed+1 ; now recreate the remaining bits in reverse order... %111
+	lsr
+	eor seed+1
+	lsr
+	eor seed+1
+	eor seed+0 ; recombine with original low byte
+	sta seed+1
+	; compute seed+0 ($39 = %111001)
+	tya ; original high byte
+	sta seed+0
+	asl
+	eor seed+0
+	asl
+	eor seed+0
+	asl
+	asl
+	asl
+	eor seed+0
+	sta seed+0
+	rts
+
+delay:
+  inc dcount              // updates fZ with status of increment result
+  bne delay               // jump to loc if fZ is not set
   inc dcount + 1 
-  bne delay         // jump to loc if fZ is not set for second bit
-  rts               // we can only reach this once both bits have overflowed
+  bne delay               // jump to loc if fZ is not set for second bit
+delay2:
+  inc dcount2             // updates fZ with status of increment result
+  bne delay2              // jump to loc if fZ is not set
+  inc dcount2 + 1 
+  bne delay2              // jump to loc if fZ is not set for second bit
+
+  lda #$00000001          // Clear display
+  jsr lcd_instruction
+
+  rts                     // We can only reach this once both delays have overflowed
 
   .org $fffc
   .word reset
